@@ -1,7 +1,10 @@
 [package]
 name = "mkcert2"
 version = "0.1.0"
+description = "Easy to use tool to generate signed certificates"
 edition = "2021"
+repository = "https://github.com/ItsEthra/mkcert2"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.75"
