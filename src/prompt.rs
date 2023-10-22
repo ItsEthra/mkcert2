@@ -1,7 +1,8 @@
+use crate::{get_ca_dir, Args};
 use anyhow::{anyhow, Result};
 use dialoguer::{
     theme::{ColorfulTheme, Theme},
-    Confirm, Input, InputValidator,
+    Confirm, Input,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use names::Generator;
@@ -11,20 +12,23 @@ use rcgen::{
     KeyPair, KeyUsagePurpose, SanType, PKCS_RSA_SHA256,
 };
 use rsa::{pkcs8::EncodePrivateKey, RsaPrivateKey};
-use std::{fs, net::IpAddr, str::FromStr};
+use std::{fs, iter::repeat_with, net::IpAddr, str::FromStr};
 use time::Duration;
-
-use crate::get_ca_dir;
 
 fn autofill(dn: &mut DistinguishedName) {
     let name_host = format!("{}@{}", whoami::username(), whoami::hostname());
-    let values = [
-        DnType::CountryName,
-        DnType::OrganizationName,
-        DnType::CommonName,
-    ];
 
-    values.into_iter().for_each(|v| dn.push(v, &name_host));
+    dn.push(DnType::OrganizationName, "mkcert2");
+    dn.push(
+        DnType::OrganizationalUnitName,
+        format!("mkcert2 {name_host}"),
+    );
+
+    // suffix is needed because common names are supposed to be different between CAs and normal certs
+    let suffix = repeat_with(fastrand::alphanumeric)
+        .take(4)
+        .collect::<String>();
+    dn.push(DnType::CommonName, format!("{name_host} {suffix}",));
 }
 
 pub fn distinguished_name() -> Result<DistinguishedName> {
@@ -72,27 +76,29 @@ pub fn distinguished_name() -> Result<DistinguishedName> {
     Ok(out)
 }
 
-pub fn valid_duration() -> Result<Duration> {
-    struct Validator;
-    impl InputValidator<String> for Validator {
-        type Err = parse_duration::parse::Error;
-
-        fn validate(&mut self, input: &String) -> std::result::Result<(), Self::Err> {
-            parse_duration::parse(input)?;
-            Ok(())
-        }
+pub fn create_root_ca(args: &Args) -> Result<()> {
+    let dir = get_ca_dir();
+    if dir.exists() {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Do you want to overwrite existing certificate authority?")
+            .interact()?
+            .then_some(())
+            .ok_or(anyhow!("Not overwriting"))?;
     }
 
-    let valid_duration: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Valid for")
-        .default("1y".to_owned())
-        .validate_with(Validator)
-        .interact()?;
-    let duration = parse_duration::parse(&valid_duration)?;
-    Ok(duration.try_into()?)
+    println!("Creating new certificate authority");
+    let cert = create_new_cert(true, args)?;
+
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("rootCA-cert.pem"), cert.serialize_pem()?)?;
+    fs::write(dir.join("rootCA-key.pem"), cert.serialize_private_key_pem())?;
+
+    println!("Created root certificate authority in {dir:?}");
+
+    Ok(())
 }
 
-pub fn get_root_ca() -> Result<Certificate> {
+pub fn get_root_ca(args: &Args) -> Result<Certificate> {
     let dir = get_ca_dir();
 
     if !dir.exists() {
@@ -102,13 +108,7 @@ pub fn get_root_ca() -> Result<Certificate> {
             .interact()?
             .then_some(())
             .ok_or(anyhow!("Root CA is required"))?;
-        let cert = create_new_cert(true)?;
-
-        fs::create_dir_all(&dir)?;
-        fs::write(dir.join("rootCA-cert.pem"), cert.serialize_pem()?)?;
-        fs::write(dir.join("rootCA-key.pem"), cert.serialize_private_key_pem())?;
-
-        println!("Created root CA in {dir:?}");
+        create_root_ca(args)?;
     } else {
         println!("Using existing root CA from {dir:?}");
     }
@@ -124,14 +124,10 @@ pub fn get_root_ca() -> Result<Certificate> {
     Ok(cert)
 }
 
-fn prompt_alt_names() -> Result<Vec<SanType>> {
-    let domains: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Domains")
-        .interact_text()?;
-
-    let types = domains
-        .split(',')
-        .map(str::trim)
+fn get_alt_names(args: &Args) -> Result<Vec<SanType>> {
+    let types = args
+        .domains
+        .iter()
         .map(|x| IpAddr::from_str(x).map_err(|_| x))
         .map(|x| match x {
             Ok(ip) => SanType::IpAddress(ip),
@@ -142,11 +138,11 @@ fn prompt_alt_names() -> Result<Vec<SanType>> {
     Ok(types)
 }
 
-pub fn create_new_cert(ca: bool) -> Result<Certificate> {
+pub fn create_new_cert(ca: bool, args: &Args) -> Result<Certificate> {
     let distinguished_name = distinguished_name()?;
-    let valid_for = valid_duration()?;
+    let valid_for = parse_duration::parse(&args.valid)?;
 
-    let subject_alt_names = if !ca { prompt_alt_names()? } else { vec![] };
+    let subject_alt_names = if !ca { get_alt_names(args)? } else { vec![] };
 
     let spinner_style = ProgressStyle::with_template("{spinner} {wide_msg}")
         .unwrap()
