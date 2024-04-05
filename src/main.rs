@@ -1,28 +1,29 @@
 use anyhow::{anyhow, bail, Result};
+use clap::Parser;
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use std::{fs, path::PathBuf};
 
 mod prompt;
 
-#[derive(argh::FromArgs)]
-/// mkcert2 made at https://github.com/ItsEthra/mkcert2
+#[derive(Parser)]
+/// Simple but customizable tool for creating certificates
 struct Args {
     /// domains to generate certificate for
-    #[argh(positional)]
     domains: Vec<String>,
     /// create root certificate authority
-    #[argh(switch)]
+    #[arg(long, short)]
     install: bool,
     /// removes root certificate authority
-    #[argh(switch)]
+    #[arg(long, short)]
     remove: bool,
     /// time the certificate is valid for
-    #[argh(option, default = "String::from(\"1y\")")]
+    #[arg(long, short, default_value = "\"1y\"")]
     valid: String,
 }
 
 fn main() -> Result<()> {
-    let args: Args = argh::from_env();
+    let args = Args::parse();
+
     if args.install {
         prompt::create_root_ca(&args)?;
         return Ok(());
