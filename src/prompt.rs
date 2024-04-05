@@ -16,6 +16,7 @@ use std::{fs, iter::repeat_with, net::IpAddr, str::FromStr};
 use time::Duration;
 
 fn autofill(dn: &mut DistinguishedName) {
+    #[allow(deprecated)]
     let name_host = format!("{}@{}", whoami::username(), whoami::hostname());
 
     dn.push(DnType::OrganizationName, "mkcert2");
